@@ -1,11 +1,14 @@
 from flask import Flask, request, abort, Response, Blueprint
 from abc import ABC, abstractmethod
 import simplejson as json
+import re
 from pprint import pprint
 app = Flask(__name__)
 bp = Blueprint('api', __name__)
 
 servers = {}
+
+v4pattern = re.compile("^([0-9]{1,3}\.){3}[0-9]{1,3}$")
 
 class ValidationError(Exception):
     pass
@@ -29,7 +32,7 @@ class Client(Serializable):
 
         if not (isinstance(d['name'], str) and
                 isinstance(d['clan'], str) and
-                isinstance(d['country'], str) and
+                isinstance(d['country'], int) and
                 isinstance(d['score'], int) and
                 isinstance(d['team'], int)):
             raise ValidationError
@@ -86,8 +89,9 @@ class Map(Serializable):
         return self.__dict__
 
 class Server(Serializable):
-    def __init__(self, ip, port, name, game_type, passworded, version, max_players, max_clients, clients, map, secret, beat):
-        self.ip = ip
+    def __init__(self, ipv4, ipv6, port, name, game_type, passworded, version, max_players, max_clients, clients, map, secret, beat):
+        self.ipv4 = ipv4
+        self.ipv6 = ipv6
         self.port = port
         self.name = name
         self.game_type = game_type
@@ -99,6 +103,12 @@ class Server(Serializable):
         self.map = map
         self.secret = secret
         self.beat = beat
+
+    def set_ip(self, ipv4, ipv6):
+        if ipv4:
+            self.ipv4 = ipv4
+        if ipv6:
+            self.ipv6 = ipv6
 
     def validate_req_dict(d):
         if not all(k in d for k in ('info', 'port', 'secret', 'beat')):
@@ -135,7 +145,7 @@ class Server(Serializable):
 
         return True
 
-    def from_req_dict(d, ip):
+    def from_req_dict(d, ipv4, ipv6):
         if not Server.validate_req_dict(d):
             return None
 
@@ -150,7 +160,7 @@ class Server(Serializable):
 
         map = Map.from_dict(info['map'])
 
-        return Server(ip, d['port'], info['name'], info['game_type'], info['passworded'],
+        return Server(ipv4, ipv6, d['port'], info['name'], info['game_type'], info['passworded'],
                       info['version'], info['max_players'], info['max_clients'], clients, map,
                       d['secret'], d['beat'])
 
@@ -158,7 +168,7 @@ class Server(Serializable):
         return self.__dict__
 
     def serialize(self):
-        return {"ip": self.ip,
+        return {"ip": self.ipv4, "ipv6": self.ipv6,
                 "info": { k:getattr(self, k) for k in ('name', 'game_type', 'passworded', 'version',
                                        'max_players', 'max_clients', 'clients', 'map')},
                 "port": self.port}
@@ -180,10 +190,22 @@ def server_beat():
         if data is None:
             abort(400)
 
-        s = Server.from_req_dict(data, request.remote_addr)
-        key = '{}#{}'.format(request.remote_addr, s.port)
-        if not (key in servers.keys() and servers[key].beat > s.beat):
+        s = Server.from_req_dict(data, "", "")
+        key = s.secret
+        if key in servers.keys():
+            s.set_ip(servers[key].ipv4, servers[key].ipv6)
+
+        if v4pattern.match(request.remote_addr):
+            s.set_ip(request.remote_addr, None)
+        else:
+            s.set_ip(None, request.remote_addr)
+
+        if key not in servers.keys() or servers[key].beat > s.beat:
             servers[key] = s
+
+    # Also need to ensure no two servers register with the same ip,
+    # which will be a little bit of trouble given each server can have 2 ips
+    # a problem for another day
 
         return 'Done'
 
