@@ -3,6 +3,8 @@ from abc import ABC, abstractmethod
 import simplejson as json
 import re
 from pprint import pprint
+from typing import get_type_hints
+
 app = Flask(__name__)
 bp = Blueprint('api', __name__)
 
@@ -10,8 +12,22 @@ servers = {}
 
 v4pattern = re.compile("^([0-9]{1,3}\.){3}[0-9]{1,3}$")
 
-class ValidationError(Exception):
-    pass
+def typechecked(func):
+    def wrapper(self, **kwargs):
+        hints = get_type_hints(func)
+
+        for key, value in kwargs.items():
+            hint = hints.get(key, None)
+            if hint is None:
+                continue
+
+            if not isinstance(value, hint):
+                fmt = 'Expected {0.__name__} for {1!r}, received {2.__class__.__name__} instead'
+                raise TypeError(fmt.format(hint, key, value))
+
+        return func(self, **kwargs)
+
+    return wrapper
 
 class Serializable(ABC):
     @abstractmethod
@@ -19,33 +35,13 @@ class Serializable(ABC):
         pass
 
 class Client(Serializable):
-    def __init__(self, name, clan, country, score, team):
+    @typechecked
+    def __init__(self, *, name: str, clan: str, country: int, score: int, team: int, **kwargs):
         self.name = name
         self.clan = clan
         self.country = country
         self.score = score
         self.team = team
-
-    @staticmethod
-    def validate_dict(d):
-        if not all(k in d for k in ('name', 'clan', 'country', 'score', 'team')):
-            raise ValidationError
-
-        if not (isinstance(d['name'], str) and
-                isinstance(d['clan'], str) and
-                isinstance(d['country'], int) and
-                isinstance(d['score'], int) and
-                isinstance(d['team'], int)):
-            raise ValidationError
-
-        return True
-
-    @classmethod
-    def from_dict(cls, d):
-        if not Client.validate_dict(d):
-            return None
-
-        return cls(d['name'], d['clan'], d['country'], d['score'], d['team'])
 
     def to_dict(self):
         return self.__dict__
@@ -54,37 +50,18 @@ class Client(Serializable):
         return self.__dict__
 
 class Map(Serializable):
-    def __init__(self, name, crc, sha256, size):
+    @typechecked
+    def __init__(self, *, name: str, crc: str, sha256: str, size: int, **kwargs):
         self.name = name
         self.crc = crc
         self.sha256 = sha256
         self.size = size
 
-    @staticmethod
-    def validate_dict(d):
-        if not all(k in d for k in ('name', 'crc', 'sha256', 'size')):
-            raise ValidationError
-
-        if not (isinstance(d['name'], str) and
-                isinstance(d['crc'], str) and
-                isinstance(d['sha256'], str) and
-                isinstance(d['size'], int)):
-            raise ValidationError
-
         try:
-            int(d['crc'], 16)
-            int(d['sha256'], 16)
+            int(crc, 16)
+            int(sha256, 16)
         except ValueError:
-            raise ValidationError
-
-        return True
-
-    @classmethod
-    def from_dict(cls, d):
-        if not Map.validate_dict(d):
-            return None
-
-        return cls(d['name'], d['crc'], d['sha256'], d['size'])
+            raise ValueError("'crc' and 'sha256' have to be base 16")
 
     def to_dict(self):
         return self.__dict__
@@ -93,7 +70,10 @@ class Map(Serializable):
         return self.__dict__
 
 class Server(Serializable):
-    def __init__(self, ipv4, ipv6, port, name, game_type, passworded, version, max_players, max_clients, clients, map, secret, beat):
+    @typechecked
+    def __init__(self, *, ipv4: str, ipv6: str, port: int, name: str, game_type: str,
+                 passworded: bool, version: str, max_players: int, max_clients: int,
+                 clients: list, map: dict, secret: str, beat: int, **kwargs):
         self.ipv4 = ipv4
         self.ipv6 = ipv6
         self.port = port
@@ -108,67 +88,22 @@ class Server(Serializable):
         self.secret = secret
         self.beat = beat
 
+        if not 0 <= port <= 65536:
+            raise ValueError('port has to be between 0 and 65536')
+
     def set_ip(self, ipv4, ipv6):
         if ipv4:
             self.ipv4 = ipv4
         if ipv6:
             self.ipv6 = ipv6
 
-    @staticmethod
-    def validate_req_dict(d):
-        if not all(k in d for k in ('info', 'port', 'secret', 'beat')):
-            raise ValidationError
-
-        if not (isinstance(d['info'], dict) and
-                isinstance(d['port'], int) and
-                isinstance(d['secret'], str) and
-                isinstance(d['beat'], int)):
-            raise ValidationError
-
-        info = d['info']
-        if not all(k in info for k in ('name', 'game_type', 'passworded', 'version',
-                                       'max_players', 'max_clients', 'clients', 'map')):
-            raise ValidationError
-
-
-        if not (isinstance(info['name'], str) and
-                isinstance(info['game_type'], str) and
-                isinstance(info['passworded'], bool) and
-                isinstance(info['version'], str) and
-                isinstance(info['max_players'], int) and
-                isinstance(info['max_clients'], int) and
-                isinstance(info['clients'], list) and
-                isinstance(info['map'], dict)):
-            raise ValidationError
-
-        if not 0 <= d['port'] <= 65536:
-            raise ValidationError
-
-        if not (Map.validate_dict(info['map']) and
-                all((isinstance(p, dict) and Client.validate_dict(p)) for p in info['clients'])):
-            raise ValidationError
-
-        return True
-
     @classmethod
-    def from_req_dict(cls, d, ipv4, ipv6):
-        if not Server.validate_req_dict(d):
-            return None
+    def from_req_dict(cls, data, ipv4, ipv6):
+        info = data.pop('info')
+        clients = [Client(**c) for c in info.pop('clients')]
+        map = Map(**info.pop('map'))
 
-        info = d['info']
-
-        clients = []
-        for p in info['clients']:
-            t = Client.from_dict(p)
-            if t is None:
-                raise Exception("Invalid player in player list")
-            clients.append(t)
-
-        map = Map.from_dict(info['map'])
-
-        return cls(ipv4, ipv6, d['port'], info['name'], info['game_type'], info['passworded'],
-                      info['version'], info['max_players'], info['max_clients'], clients, map,
-                      d['secret'], d['beat'])
+        return cls(ipv4=ipv4, ipv6=ipv6, clients=clients, map=map, **data, **info)
 
     def to_dict(self):
         return self.__dict__
@@ -196,7 +131,11 @@ def server_beat():
         if data is None:
             abort(400)
 
-        s = Server.from_req_dict(data, "", "")
+        try:
+            s = Server.from_req_dict(data, "", "")
+        except (KeyError, TypeError, ValueError):
+            abort(400)
+
         key = s.secret
         if key in servers.keys():
             s.set_ip(servers[key].ipv4, servers[key].ipv6)
