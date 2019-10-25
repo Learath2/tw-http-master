@@ -26,6 +26,7 @@ class Client(Serializable):
         self.score = score
         self.team = team
 
+    @staticmethod
     def validate_dict(d):
         if not all(k in d for k in ('name', 'clan', 'country', 'score', 'team')):
             raise ValidationError
@@ -39,11 +40,12 @@ class Client(Serializable):
 
         return True
 
-    def from_dict(d):
+    @classmethod
+    def from_dict(cls, d):
         if not Client.validate_dict(d):
             return None
 
-        return Client(d['name'], d['clan'], d['country'], d['score'], d['team'])
+        return cls(d['name'], d['clan'], d['country'], d['score'], d['team'])
 
     def to_dict(self):
         return self.__dict__
@@ -58,6 +60,7 @@ class Map(Serializable):
         self.sha256 = sha256
         self.size = size
 
+    @staticmethod
     def validate_dict(d):
         if not all(k in d for k in ('name', 'crc', 'sha256', 'size')):
             raise ValidationError
@@ -76,11 +79,12 @@ class Map(Serializable):
 
         return True
 
-    def from_dict(d):
+    @classmethod
+    def from_dict(cls, d):
         if not Map.validate_dict(d):
             return None
 
-        return Map(d['name'], d['crc'], d['sha256'], d['size'])
+        return cls(d['name'], d['crc'], d['sha256'], d['size'])
 
     def to_dict(self):
         return self.__dict__
@@ -110,6 +114,7 @@ class Server(Serializable):
         if ipv6:
             self.ipv6 = ipv6
 
+    @staticmethod
     def validate_req_dict(d):
         if not all(k in d for k in ('info', 'port', 'secret', 'beat')):
             raise ValidationError
@@ -145,7 +150,8 @@ class Server(Serializable):
 
         return True
 
-    def from_req_dict(d, ipv4, ipv6):
+    @classmethod
+    def from_req_dict(cls, d, ipv4, ipv6):
         if not Server.validate_req_dict(d):
             return None
 
@@ -160,7 +166,7 @@ class Server(Serializable):
 
         map = Map.from_dict(info['map'])
 
-        return Server(ipv4, ipv6, d['port'], info['name'], info['game_type'], info['passworded'],
+        return cls(ipv4, ipv6, d['port'], info['name'], info['game_type'], info['passworded'],
                       info['version'], info['max_players'], info['max_clients'], clients, map,
                       d['secret'], d['beat'])
 
